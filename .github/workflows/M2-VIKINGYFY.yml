@@ -1,5 +1,4 @@
 name: Firmware-M2-VIKINGYFY
-
 on:
   repository_dispatch:
   workflow_dispatch:
@@ -13,6 +12,10 @@ on:
         required: false
         default: false
         type: boolean
+
+# 全局权限（必须加，否则 Release 步骤会报错）
+permissions:
+  contents: write
 
 env:
   REPO_URL: https://github.com/VIKINGYFY/immortalwrt
@@ -30,9 +33,12 @@ env:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    
+    # 解决 Node.js 20 弃用警告（强制使用 Node.js 24）
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
-
     - name: Show system & Setup
       run: |
         echo -e "Total CPU cores\t: $(nproc)"
@@ -43,7 +49,7 @@ jobs:
         sudo chown $USER:$GROUPS /workdir
 
     - name: Checkout
-      uses: actions/checkout@main
+      uses: actions/checkout@v4
 
     - name: Free Disk Space
       uses: jlumbroso/free-disk-space@main
@@ -80,7 +86,7 @@ jobs:
         sudo apt-get autoremove -y --purge
         sudo apt-get clean
 
-    - name: Cache (toolchain)
+    - name: Cache (toolchain + ccache) - HiGarfield
       if: ${{ github.event.inputs.only_config != 'true' }}
       uses: HiGarfield/cachewrtbuild@main
       with:
@@ -88,38 +94,15 @@ jobs:
         mixkey: 'M2-VIKINGYFY'
         prefix: ${{ github.workspace }}/openwrt
 
-    # ===== 极限缓存增强 =====
-
-    - name: Cache dl
+    # ==================== 极限缓存增强（已优化顺序和路径） ====================
+    - name: Cache dl (下载包缓存)
+      if: ${{ github.event.inputs.only_config != 'true' }}
       uses: actions/cache@v4
       with:
         path: openwrt/dl
         key: ${{ runner.os }}-dl-${{ hashFiles('feeds.conf.default') }}
         restore-keys: |
           ${{ runner.os }}-dl-
-
-    - name: Cache build_dir
-      uses: actions/cache@v4
-      with:
-        path: openwrt/build_dir
-        key: ${{ runner.os }}-build-${{ hashFiles('openwrt/.config') }}
-        restore-keys: |
-          ${{ runner.os }}-build-
-
-    - name: Cache ccache
-      uses: actions/cache@v4
-      with:
-        path: .ccache
-        key: ${{ runner.os }}-ccache-${{ hashFiles('openwrt/.config') }}
-        restore-keys: |
-          ${{ runner.os }}-ccache-
-
-    - name: Enable ccache
-      run: |
-        echo "USE_CCACHE=1" >> $GITHUB_ENV
-        echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> $GITHUB_ENV
-        ccache -M 10G
-        ccache -s
 
     - name: Load custom feeds
       run: |
@@ -144,17 +127,45 @@ jobs:
         make defconfig
         cp .config CONFIG_M2-VIKINGYFY.txt
 
-    - name: Pre-download optimize
+    # 在 .config 已经生成后再缓存 build_dir 和 ccache（key 才能正确命中）
+    - name: Cache build_dir
+      if: ${{ github.event.inputs.only_config != 'true' }}
+      uses: actions/cache@v4
+      with:
+        path: openwrt/build_dir
+        key: ${{ runner.os }}-build-${{ hashFiles('openwrt/.config') }}
+        restore-keys: |
+          ${{ runner.os }}-build-
+
+    - name: Cache ccache（独立缓存）
+      if: ${{ github.event.inputs.only_config != 'true' }}
+      uses: actions/cache@v4
+      with:
+        path: ${{ github.workspace }}/.ccache
+        key: ${{ runner.os }}-ccache-${{ hashFiles('openwrt/.config') }}
+        restore-keys: |
+          ${{ runner.os }}-ccache-
+
+    - name: Enable ccache（完整启用）
+      if: ${{ github.event.inputs.only_config != 'true' }}
       run: |
-        cd openwrt
-        make defconfig
+        echo "USE_CCACHE=1" >> $GITHUB_ENV
+        echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> $GITHUB_ENV
+        echo "CCACHE_MAXSIZE=10G" >> $GITHUB_ENV
+        echo "CCACHE_COMPRESS=1" >> $GITHUB_ENV
+        echo "CCACHE_COMPRESSLEVEL=6" >> $GITHUB_ENV
+        ccache -M 10G
+        ccache -z
+        ccache -s
 
     - name: Download package
+      if: ${{ github.event.inputs.only_config != 'true' }}
       run: |
         cd openwrt
         make download -j$(nproc)
 
     - name: Compile the firmware
+      if: ${{ github.event.inputs.only_config != 'true' }}
       id: compile
       run: |
         cd openwrt
@@ -168,8 +179,14 @@ jobs:
     - name: Check space usage
       run: df -hT
 
+    - name: Upload CONFIG
+      uses: actions/upload-artifact@v4
+      with:
+        name: CONFIG_M2-VIKINGYFY
+        path: openwrt/CONFIG_M2-VIKINGYFY.txt
+
     - name: Upload bin directory
-      uses: actions/upload-artifact@main
+      uses: actions/upload-artifact@v4
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
       with:
         name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}-VIKINGYFY
@@ -178,6 +195,7 @@ jobs:
 
     - name: Organize files
       id: organize
+      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
       run: |
         cd openwrt/bin/targets/*/*
         rm -rf packages
@@ -185,7 +203,7 @@ jobs:
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware directory
-      uses: actions/upload-artifact@main
+      uses: actions/upload-artifact@v4
       if: steps.organize.outputs.status == 'success'
       with:
         name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}-VIKINGYFY
@@ -194,6 +212,7 @@ jobs:
 
     - name: Generate release tag
       id: tag
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
         echo "release_tag=$(date +"%Y.%m.%d-%H.%M")_M2-VIKINGYFY" >> $GITHUB_OUTPUT
         touch release.txt
@@ -201,7 +220,7 @@ jobs:
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware to release
-      uses: softprops/action-gh-release@master
+      uses: softprops/action-gh-release@v2
       if: steps.tag.outputs.status == 'success'
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
