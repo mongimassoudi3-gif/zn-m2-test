@@ -93,6 +93,16 @@ jobs:
         mixkey: 'M2'
         prefix: ${{ github.workspace }}/openwrt
 
+# ←←← 在这里插入清理步骤（推荐位置）
+    - name: Clean toolchain cache (one-time only)
+      if: ${{ github.event.inputs.only_config != 'true' }}
+      working-directory: /workdir
+      run: |
+        echo "=== Cleaning old toolchain cache to force GCC 13.3 ==="
+        rm -rf openwrt/staging_dir/toolchain-aarch64*
+        rm -rf openwrt/staging_dir/host*
+        echo "Toolchain cache cleaned."
+ 
     # ===== dl缓存 =====
     - name: Cache dl
       if: ${{ github.event.inputs.only_config != 'true' }}
