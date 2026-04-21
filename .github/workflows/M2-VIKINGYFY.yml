@@ -1,5 +1,4 @@
 name: Firmware-M2
-
 on:
   repository_dispatch:
   workflow_dispatch:
@@ -33,7 +32,6 @@ env:
 jobs:
   build:
     runs-on: ubuntu-24.04
-
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -93,23 +91,23 @@ jobs:
         mixkey: 'M2'
         prefix: ${{ github.workspace }}/openwrt
 
-# ←←← 在这里插入清理步骤（推荐位置）
-    - name: Clean toolchain cache (one-time only)
+    # 强制清理旧 toolchain（一次性使用，跑完后可注释或删除）
+    - name: Clean toolchain cache (one-time only - force GCC 13.3)
       if: ${{ github.event.inputs.only_config != 'true' }}
       working-directory: /workdir
       run: |
         echo "=== Cleaning old toolchain cache to force GCC 13.3 ==="
         rm -rf openwrt/staging_dir/toolchain-aarch64*
         rm -rf openwrt/staging_dir/host*
-        echo "Toolchain cache cleaned."
- 
-    # ===== dl缓存 =====
+        rm -rf openwrt/build_dir/toolchain*
+        echo "Toolchain cache cleaned. Will rebuild with GCC 13.3."
+
     - name: Cache dl
       if: ${{ github.event.inputs.only_config != 'true' }}
       uses: actions/cache@v4
       with:
         path: openwrt/dl
-        key: ${{ runner.os }}-dl-${{ hashFiles('openwrt/feeds.conf.default') }}
+        key: ${{ runner.os }}-dl-${{ hashFiles('feeds.conf.default') }}
         restore-keys: |
           ${{ runner.os }}-dl-
 
@@ -136,7 +134,6 @@ jobs:
         make defconfig
         cp .config CONFIG_M2.txt
 
-    # ===== build缓存 =====
     - name: Cache build_dir
       if: ${{ github.event.inputs.only_config != 'true' }}
       uses: actions/cache@v4
@@ -159,7 +156,7 @@ jobs:
       if: ${{ github.event.inputs.only_config != 'true' }}
       uses: actions/cache@v4
       with:
-        path: .ccache
+        path: ${{ github.workspace }}/.ccache
         key: ${{ runner.os }}-ccache-${{ hashFiles('openwrt/.config') }}
         restore-keys: |
           ${{ runner.os }}-ccache-
@@ -169,16 +166,10 @@ jobs:
       run: |
         echo "USE_CCACHE=1" >> $GITHUB_ENV
         echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> $GITHUB_ENV
+        echo "CCACHE_MAXSIZE=10G" >> $GITHUB_ENV
         ccache -M 10G
         ccache -z
         ccache -s
-
-    # ===== 关键优化点 =====
-    - name: Pre-download optimize
-      if: ${{ github.event.inputs.only_config != 'true' }}
-      run: |
-        cd openwrt
-        make defconfig
 
     - name: Download package
       if: ${{ github.event.inputs.only_config != 'true' }}
