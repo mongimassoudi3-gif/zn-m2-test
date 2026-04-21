@@ -1,0 +1,15 @@
+# Build artifacts
+openwrt/bin/
+openwrt/build_dir/
+openwrt/staging_dir/
+openwrt/dl/
+openwrt/tmp/
+*.log
+*.bak
+CONFIG_*.txt
+
+# IDE / OS files
+.DS_Store
+.vscode/
+.idea/
+*.swp
